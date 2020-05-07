@@ -9,10 +9,10 @@ struct CmdArgs {
     port: usize,
 }
 
-fn main() {
+fn main() -> Result<(), std::io::Error> {
     let cmd_args: CmdArgs = argh::from_env();
 
-    println!("{:?}", cmd_args);
+    repl::run(cmd_args.port)?;
 
-    repl::run(cmd_args.port);
+    Ok(())
 }

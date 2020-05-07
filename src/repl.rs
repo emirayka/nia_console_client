@@ -1,32 +1,28 @@
-use std::path::Path;
-use std::sync::{mpsc, Mutex, Arc};
+use std::sync::mpsc;
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::thread;
 
 use rustyline::error::ReadlineError;
 use rustyline::Editor;
 
 use nia_protocol_rust::*;
 use protobuf::Message;
-use ws::CloseCode;
-use std::thread;
 
 const HISTORY_FILE_NAME: &'static str = ".nia-console-client.history";
 
 fn get_history_file_path() -> Option<String> {
     match dirs::home_dir() {
-        Some(dir) => {
-            match dir.as_path().join(HISTORY_FILE_NAME).to_str() {
-                Some(s) => Some(s.to_string()),
-                _ => None
-            }
-        }
-        _ => {
-            None
-        }
+        Some(dir) => match dir.as_path().join(HISTORY_FILE_NAME).to_str() {
+            Some(s) => Some(s.to_string()),
+            _ => None,
+        },
+        _ => None,
     }
 }
 
 fn make_handshake_request() -> Request {
-    let mut handshake_request = HandshakeRequest::new();
+    let handshake_request = HandshakeRequest::new();
 
     let mut request = Request::new();
     request.set_handshake_request(handshake_request);
@@ -109,14 +105,15 @@ fn connect_to_server(port: usize) -> (mpsc::Sender<String>, mpsc::Receiver<Respo
     let server_path = format!("ws://127.0.0.1:{}", port);
 
     thread::spawn(move || {
-        ws::connect(server_path,  move |out| {
+        ws::connect(server_path, move |out| {
             let string_receiver = Arc::clone(&string_receiver);
             let response_sender = Arc::clone(&response_sender);
 
             // send handshake request
             let handshake_request = make_handshake_request();
 
-            let bytes = handshake_request.write_to_bytes()
+            let bytes = handshake_request
+                .write_to_bytes()
                 .expect("Failure while serializing request");
 
             match out.send(bytes) {
@@ -136,14 +133,17 @@ fn connect_to_server(port: usize) -> (mpsc::Sender<String>, mpsc::Receiver<Respo
                     ws::Message::Binary(bytes) => {
                         let mut response = Response::new();
 
-                        response.merge_from_bytes(&bytes);
+                        response
+                            .merge_from_bytes(&bytes)
+                            .expect("Failure while merging response from the server.");
 
                         response
-                    },
-                    ws::Message::Text(string) => {
+                    }
+                    ws::Message::Text(_) => {
                         println!("Got text message instead of binary :/");
                         println!("The server probably is not that we was looking for...");
                         println!("Ignoring...");
+
                         return Ok(());
                     }
                 };
@@ -152,35 +152,56 @@ fn connect_to_server(port: usize) -> (mpsc::Sender<String>, mpsc::Receiver<Respo
                     Ok(_) => {}
                     Err(_) => {
                         println!("Response channel is ded now :(");
-
                         println!("No more responses can be sent.");
-                        out.close(ws::CloseCode::Normal);
-                        println!("So connection was closed.");
+
+                        match out.close(ws::CloseCode::Normal) {
+                            Ok(_) => {
+                                println!("Successfully closed connection.");
+                            }
+                            Err(_) => {
+                                println!("Connection was closed with an error.");
+                            }
+                        };
+
+                        println!("Connection to the server is closed now.");
                     }
                 }
 
                 // send execute code request
                 let string = match string_receiver.recv() {
                     Ok(s) => s,
-                    _ => {
-                        println!("String channel is ded now :(");
-                        println!("Cannot get message...");
-                        println!("So connection was closed.");
+                    Err(_) => {
+                        println!("String channel is closed now.");
+                        println!("Cannot get message anymore..");
+                        println!("Closing connection to the server.");
 
-                        out.close(ws::CloseCode::Normal);
+                        match out.close(ws::CloseCode::Normal) {
+                            Ok(_) => {
+                                println!("Successfully closed connection.");
+                            }
+                            Err(_) => {
+                                println!("Connection was closed with an error.");
+                            }
+                        };
+
+                        println!("Connection to the server is closed now.");
+
                         return Ok(());
                     }
                 };
 
                 let execute_code_request = make_execute_code_request(string);
-                let bytes = execute_code_request.write_to_bytes()
-                    .expect("Failure while serializing request");
+                let bytes = execute_code_request
+                    .write_to_bytes()
+                    .expect("Failure while serializing request.");
 
-                out.send(bytes);
+                out.send(bytes)
+                    .expect("Failure while sending request to the server.");
 
                 Ok(())
             }
-        }).unwrap();
+        })
+        .unwrap();
     });
 
     (string_sender, response_receiver)
@@ -192,7 +213,12 @@ pub fn run(port: usize) -> Result<(), std::io::Error> {
     let mut rl = Editor::<()>::new();
 
     if let Some(history) = &history_file {
-        rl.load_history(history);
+        match rl.load_history(history) {
+            Ok(_) => {}
+            Err(_) => {
+                println!("History file can't be constructed.");
+            }
+        };
     } else {
         println!("History file can't be constructed.");
     }
@@ -208,13 +234,13 @@ pub fn run(port: usize) -> Result<(), std::io::Error> {
             } else {
                 println!("Seems that we connected to the wrong server...");
                 println!("Exiting...");
-                return Ok(())
+                return Ok(());
             }
-        },
+        }
         _ => {
             println!("Response channel is ded at the stage of handshake.");
             println!("Exiting...");
-            return Ok(())
+            return Ok(());
         }
     };
 
@@ -226,11 +252,13 @@ pub fn run(port: usize) -> Result<(), std::io::Error> {
                 rl.add_history_entry(line.as_str());
 
                 match string_sender.send(line) {
-                    Ok(_) => {},
+                    Ok(_) => {}
                     _ => {
-                        println!("Finally, because string channel is ded the app will be terminated...");
+                        println!(
+                            "Finally, because string channel is ded the app will be terminated..."
+                        );
                         break;
-                    },
+                    }
                 };
 
                 let mut response = match response_receiver.recv() {
