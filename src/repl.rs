@@ -8,6 +8,7 @@ use rustyline::Editor;
 
 use nia_protocol_rust::*;
 use protobuf::Message;
+use std::thread::JoinHandle;
 
 const HISTORY_FILE_NAME: &'static str = ".nia-console-client.history";
 
@@ -65,7 +66,7 @@ fn print_execute_code_response(response: ExecuteCodeResponse) {
         let success_result = response.take_success_result();
 
         println!("Execution result is success :)");
-        println!("Message: {}", success_result.get_execution_result());
+        println!("Message: {}", success_result.get_message());
     } else if response.has_error_result() {
         let error_result = response.take_error_result();
 
@@ -88,14 +89,18 @@ fn print_unknown_response(response: Response) {
         println!("Response type is handshake response. That is strange for sure :/");
     } else if response.has_get_devices_response() {
         println!("Response type is get devices response. That is weird...");
-    } else if response.has_get_device_info_response() {
-        println!("Response type is get device info response. That is weird...");
     } else {
         println!("Got completely unexpected response!!! Server are u ok??!");
     }
 }
 
-fn connect_to_server(port: usize) -> (mpsc::Sender<String>, mpsc::Receiver<Response>) {
+fn connect_to_server(
+    port: usize,
+) -> (
+    mpsc::Sender<String>,
+    mpsc::Receiver<Response>,
+    JoinHandle<()>,
+) {
     let (string_sender, string_receiver) = mpsc::channel::<String>();
     let (response_sender, response_receiver) = mpsc::channel();
 
@@ -104,7 +109,7 @@ fn connect_to_server(port: usize) -> (mpsc::Sender<String>, mpsc::Receiver<Respo
 
     let server_path = format!("ws://127.0.0.1:{}", port);
 
-    thread::spawn(move || {
+    let join_handle = thread::spawn(move || {
         ws::connect(server_path, move |out| {
             let string_receiver = Arc::clone(&string_receiver);
             let response_sender = Arc::clone(&response_sender);
@@ -204,7 +209,7 @@ fn connect_to_server(port: usize) -> (mpsc::Sender<String>, mpsc::Receiver<Respo
         .unwrap();
     });
 
-    (string_sender, response_receiver)
+    (string_sender, response_receiver, join_handle)
 }
 
 pub fn run(port: usize) -> Result<(), std::io::Error> {
@@ -223,7 +228,7 @@ pub fn run(port: usize) -> Result<(), std::io::Error> {
         println!("History file can't be constructed.");
     }
 
-    let (string_sender, response_receiver) = connect_to_server(port);
+    let (string_sender, response_receiver, join_handle) = connect_to_server(port);
 
     match response_receiver.recv() {
         Ok(response) => {
@@ -292,6 +297,10 @@ pub fn run(port: usize) -> Result<(), std::io::Error> {
         rl.save_history(history)
             .expect(&format!("Failure saving history at: {}", history));
     }
+
+    join_handle
+        .join()
+        .expect("Failure joining with spawned thread.");
 
     Ok(())
 }
